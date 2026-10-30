@@ -4,4 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
+bytes = "1.12.1"
+reqwest = "0.13.5"
+sha1 = "0.11.0"         # Warning: Cryptographically Broken! (check alts)
+thiserror = "2.0.21"
 tokio = "1.54.1"
+urlencoding = "2.1.3"
