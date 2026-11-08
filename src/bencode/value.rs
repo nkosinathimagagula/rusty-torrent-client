@@ -96,4 +96,39 @@ impl<'a> Parser<'a> {
         self.cursor = end_idx + 1;
         Ok(BencodeValue::Integer(val))
     }
+
+    // Byte strings: <len>:<content>
+    fn parse_byte_string(&mut self) -> Result<&'a [u8], BencodeError> {
+        let start_pos = self.cursor;
+        let colon_idx = self.input[self.cursor..]
+            .iter()
+            .position(|&b| b == b':')
+            .map(|pos| self.cursor + pos)
+            .ok_or(BencodeError::UnexpectedEof)?;
+
+        let len_slice = &self.input[self.cursor..colon_idx];
+
+        // No leading zeros allowed for length
+        if len_slice.len() > 1 && len_slice[0] == b'0' {
+            return Err(BencodeError::IvalidInteger(start_pos));
+        }
+
+        let len_string = from_utf8(len_slice)
+            .map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+
+        let length = len_string
+            .parse::<usize>()
+            .map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+
+        let content_start = colon_idx + 1;
+        let content_end = content_start + length;
+
+        if content_end > self.input.len() {
+            return Err(BencodeError::UnexpectedEof);
+        }
+
+        self.cursor = content_end;
+
+        Ok(&self.input[content_start..content_end])
+    }
 }
