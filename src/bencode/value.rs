@@ -59,6 +59,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub fn parse_value(&mut self) -> Result<BencodeValue<'a>, BencodeError> {
+        match self.peek()? {
+            b'i' => self.parse_integer(),
+            b'l' => self.parse_list(),
+            b'd' => self.parse_dict(),
+            b'0'..=b'9' => self.parse_byte_string().map(BencodeValue::ByteString),
+            other => Err(BencodeError::InvalidChar(other as char, self.cursor)),
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<BencodeValue<'a>, BencodeError> {
+        let val = self.parse_value()?;
+
+        if self.cursor != self.input.len() {
+            return Err(BencodeError::TrailingData(self.cursor));
+        }
+
+        Ok(val)
+    }
+
     // Integers: i<number>e
     fn parse_integer(&mut self) -> Result<BencodeValue<'a>, BencodeError> {
         let start_pos = self.cursor;
@@ -131,4 +151,40 @@ impl<'a> Parser<'a> {
 
         Ok(&self.input[content_start..content_end])
     }
+
+    // Lists l<items>e
+    fn parse_list(&mut self) -> Result<BencodeValue<'a>, BencodeError> {
+        self.expect(b'l')?;
+        let mut list = Vec::new();
+
+        while self.peek()? != b'e' {
+            list.push(self.parse_value()?);
+        }
+
+        self.expect(b'e')?;
+        Ok(BencodeValue::List(list))
+    }
+
+    // Dictionaries: d<key><value>e
+    fn parse_dict(&mut self) -> Result<BencodeValue<'a>, BencodeError> {
+        self.expect(b'd')?;
+        let mut dict = BTreeMap::new();
+
+        while self.peek()? != b'e' {
+            let key_pos = self.cursor;
+
+            // Keys in bencode must be byte strings
+            let key = match self.peek()? {
+                b'0'..=b'9' => self.parse_byte_string()?,
+                _ => return Err(BencodeError::InvalidDictionaryKey(key_pos)),
+            };
+
+            let value = self.parse_value()?;
+            dict.insert(key, value);
+        }
+
+        self.expect(b'e')?;
+        Ok(BencodeValue::Dictionary(dict))
+    }
+    
 }
