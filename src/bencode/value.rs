@@ -99,8 +99,8 @@ impl<'a> Parser<'a> {
         // Validate Bencode edge cases: no "-0", leading zeros forbidden
         // (e.g. "i03e" is invalid)
         if (num_slice.len() > 1 && num_slice[0] == b'0')
-            || (num_slice.len() > 2 && num_slice[0] == b'-' && num_slice[1] == b'0')
-            || (num_slice.len() == 1 && num_slice[0] == b'-')
+            || (num_slice.starts_with(b"-0"))
+            || (num_slice == b"-")
         {
             return Err(BencodeError::IvalidInteger(start_pos));
         }
@@ -187,4 +187,29 @@ impl<'a> Parser<'a> {
         Ok(BencodeValue::Dictionary(dict))
     }
     
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_integer() {
+        let mut p = Parser::new(b"i42e");
+        assert_eq!(p.parse().unwrap(), BencodeValue::Integer(42));
+
+        let mut p = Parser::new(b"i-42e");
+        assert_eq!(p.parse().unwrap(), BencodeValue::Integer(-42));
+
+        let mut p = Parser::new(b"i0e");
+        assert_eq!(p.parse().unwrap(), BencodeValue::Integer(0));
+
+        // Invalid: leading zeros
+        assert!(Parser::new(b"i03e").parse().is_err());
+        // Invalid: negative zero
+        assert!(Parser::new(b"i-0e").parse().is_err());
+        // Invalid: just "-"
+        assert!(Parser::new(b"i-e").parse().is_err());
+    }
 }
