@@ -10,7 +10,7 @@ pub enum BencodeError {
     #[error("Invalid character '{0}' at offset {1}")]
     InvalidChar(char, usize),
     #[error("Integer parse error at offset {0}")]
-    IvalidInteger(usize),
+    InvalidInteger(usize),
     #[error("Dictionary keys must be byte strings at offset {0}")]
     InvalidDictionaryKey(usize),
     #[error("Trailing unparsed bytes starting at offset {0}")]
@@ -93,7 +93,7 @@ impl<'a> Parser<'a> {
         let num_slice = &self.input[self.cursor..end_idx];
 
         if num_slice.is_empty() {
-            return Err(BencodeError::IvalidInteger(start_pos));
+            return Err(BencodeError::InvalidInteger(start_pos));
         }
 
         // Validate Bencode edge cases: no "-0", leading zeros forbidden
@@ -102,15 +102,15 @@ impl<'a> Parser<'a> {
             || (num_slice.starts_with(b"-0"))
             || (num_slice == b"-")
         {
-            return Err(BencodeError::IvalidInteger(start_pos));
+            return Err(BencodeError::InvalidInteger(start_pos));
         }
 
         let num_string =
-            from_utf8(num_slice).map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+            from_utf8(num_slice).map_err(|_| BencodeError::InvalidInteger(start_pos))?;
 
         let val = num_string
             .parse::<i64>()
-            .map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+            .map_err(|_| BencodeError::InvalidInteger(start_pos))?;
 
         // skip past 'e'
         self.cursor = end_idx + 1;
@@ -130,15 +130,15 @@ impl<'a> Parser<'a> {
 
         // No leading zeros allowed for length
         if len_slice.len() > 1 && len_slice[0] == b'0' {
-            return Err(BencodeError::IvalidInteger(start_pos));
+            return Err(BencodeError::InvalidInteger(start_pos));
         }
 
         let len_string = from_utf8(len_slice)
-            .map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+            .map_err(|_| BencodeError::InvalidInteger(start_pos))?;
 
         let length = len_string
             .parse::<usize>()
-            .map_err(|_| BencodeError::IvalidInteger(start_pos))?;
+            .map_err(|_| BencodeError::InvalidInteger(start_pos))?;
 
         let content_start = colon_idx + 1;
         let content_end = content_start + length;
@@ -211,5 +211,39 @@ mod tests {
         assert!(Parser::new(b"i-0e").parse().is_err());
         // Invalid: just "-"
         assert!(Parser::new(b"i-e").parse().is_err());
+    }
+
+    #[test]
+    fn test_parse_string() {
+        let mut p = Parser::new(b"4:spam");
+        assert_eq!(p.parse().unwrap(), BencodeValue::ByteString(b"spam"));
+
+        let mut p = Parser::new(b"0:");
+        assert_eq!(p.parse().unwrap(), BencodeValue::ByteString(b""));
+    }
+
+    #[test]
+    fn test_parse_list() {
+        let mut p = Parser::new(b"l4:spami42ee");
+        assert_eq!(
+            p.parse().unwrap(),
+            BencodeValue::List(vec![
+                BencodeValue::ByteString(b"spam"),
+                BencodeValue::Integer(42)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_dict() {
+        let mut p = Parser::new(b"d3:bar4:spam3:fooi42ee");
+        let val = p.parse().unwrap();
+
+        if let BencodeValue::Dictionary(map) = val {
+            assert_eq!(map.get(&b"bar"[..]), Some(&BencodeValue::ByteString(b"spam")));
+            assert_eq!(map.get(&b"foo"[..]), Some(&BencodeValue::Integer(42)));
+        } else {
+            panic!("Expected a dictionary");
+        }
     }
 }
