@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::str::from_utf8;
+use std::ops::Range;
 
 use thiserror::Error;
 
@@ -28,11 +29,16 @@ pub enum BencodeValue<'a> {
 pub struct Parser<'a> {
     input: &'a [u8],
     cursor: usize,
+    pub info_span: Option<Range<usize>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(input: &'a [u8]) -> Self {
-        Self { input, cursor: 0 }
+        Self {
+            input,
+            cursor: 0,
+            info_span: None,
+        }
     }
 
     fn peek(&self) -> Result<u8, BencodeError> {
@@ -179,7 +185,14 @@ impl<'a> Parser<'a> {
                 _ => return Err(BencodeError::InvalidDictionaryKey(key_pos)),
             };
 
+            let val_start = self.cursor;
             let value = self.parse_value()?;
+            let val_end = self.cursor;
+
+            if key == b"info" && self.info_span.is_none() {
+                self.info_span = Some(val_start..val_end);
+            }
+
             dict.insert(key, value);
         }
 
