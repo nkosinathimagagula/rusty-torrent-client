@@ -2,6 +2,7 @@ use crate::bencode::{value::Parser, BencodeError, BencodeValue};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::str::from_utf8;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -27,7 +28,113 @@ pub struct Torrent {
   /// Nominal size of each piece in bytes (e.g., 262144 for 256 KB)
   pub piece_length: usize,
   /// Ordered list of 20-byte SHA-1 hashes for each piece
-  pub piece_hash: Vec<[u8; 20]>,
+  pub piece_hashes: Vec<[u8; 20]>,
   /// 20-byte SHA-1 hash of the raw bencoded `info` dictionary
   pub info_hash: [u8; 20],
+}
+
+impl Torrent{
+  pub fn from_bytes(bytes: &[u8]) -> Result<Self, TorrentError> {
+    let mut parser = Parser::new(bytes);
+    let root = parser.parse()?;
+
+    let root_dict = match root {
+      BencodeValue::Dictionary(d) => d,
+      _ => return Err(TorrentError::InvalidFormat("Root must be a dictionary")),
+    };
+
+    // Extract tracker URL
+    let announce_bytes = get_bytes(&root_dict, b"announce")?;
+    let announce = from_utf8(announce_bytes)?.to_string();
+
+    // Extract raw 'info' sclice and calculate sha1 info-hash
+    let info_span = parser
+      .info_span
+      .ok_or(TorrentError::InvalidFormat("Missing 'info' dictionary"))?;
+    let raw_info_bytes = &bytes[info_span];
+
+    let mut hasher = Sha1::new();
+    hasher.update(raw_info_bytes);
+    let info_hash: [u8; 20] = hasher.finalize().into();
+
+    // Extract 'info' dictionary fields
+    let info_dict = match root_dict.get(&b"info"[..]) {
+      Some(BencodeValue::Dictionary(d)) => d,
+      _ => return Err(TorrentError::InvalidFormat("info must be a dictionary"))
+    };
+
+    let name_bytes = get_bytes(info_dict, b"name")?;
+    let name = from_utf8(name_bytes)?.to_string();
+
+    // Note: Multi-file torrents use a `files` list instead of `length`.
+    // We enforce single-file mode for now.
+    let length = get_int(info_dict, b"length")?
+      .try_into()
+      .map_err(|_| TorrentError::InvalidFormat("Negative or overflowing file length"))?;
+
+    let piece_length = get_int(info_dict, b"piece length")?
+      .try_into()
+      .map_err(|_| TorrentError::InvalidFormat("Invalid piece length"))?;
+
+    // Split concatenated 20-byte piece sha1 hashes
+    let raw_pieces = get_bytes(info_dict, b"pieces")?;
+    let chunks = raw_pieces.chunks_exact(20);
+
+    if !chunks.remainder().is_empty() {
+      return Err(TorrentError::InvalidFormat("'pieces' byte length is not a multiple of 20"));
+    }
+
+    let piece_hashes: Vec<[u8; 20]> = chunks
+      .map(|chunk| {
+        let mut hash = [0u8; 20];
+        hash.copy_from_slice(chunk);
+
+        hash
+      })
+      .collect();
+
+    if piece_hashes.is_empty() {
+      return Err(TorrentError::InvalidFormat("Torrent contains 0 pieces"));
+    }
+    
+    Ok(Self {
+      announce,
+      name,
+      length,
+      piece_length,
+      piece_hashes,
+      info_hash,
+    })
+  }
+
+  pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TorrentError> {
+    let bytes = std::fs::read(path)?;
+
+    Self::from_bytes(&bytes)
+  }
+
+  /// Formats 'info_hash' as a 40-character lowercase hex string for logging
+  pub fn info_hash_hex(&self) -> String {
+    self.info_hash.iter().map(|b| format!("{:02x}", b)).collect()
+  }
+}
+
+fn get_bytes<'a>(
+  dict: &BTreeMap<&'a [u8], BencodeValue<'a>>,
+  key: &[u8]
+) -> Result<&'a [u8], TorrentError> {
+  match dict.get(key) {
+    Some(BencodeValue::ByteString(b)) => Ok(b),
+    _ => Err(TorrentError::InvalidFormat("Missing or invalid byte string field"))
+  }
+}
+
+fn get_int<'a>(
+  dict: &BTreeMap<&'a [u8], BencodeValue<'a>>,
+  key: &[u8]
+) -> Result<i64, TorrentError> {
+  match dict.get(key) {
+    Some(BencodeValue::Integer(i)) => Ok(*i),
+    _ => Err(TorrentError::InvalidFormat("Missing or invalid integer field"))
+  }
 }
