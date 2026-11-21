@@ -138,3 +138,48 @@ fn get_int<'a>(
     _ => Err(TorrentError::InvalidFormat("Missing or invalid integer field"))
   }
 }
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_parse_synthetic_torrent() {
+    // Construct a valid minimal single-file torrent:
+    // d
+    //   8:announce 23:http://tracker.test/ann
+    //   4:info d
+    //     6:length i1024e
+    //     4:name 8:test.txt
+    //     12:piece length i512e
+    //     6:pieces 40:<20 bytes of 0xAA><20 bytes of 0xBB>
+    //   e
+    // e
+    let mut raw = Vec::new();
+    raw.extend_from_slice(b"d8:announce23:http://tracker.test/ann4:info");
+
+    let info_start = raw.len();
+    raw.extend_from_slice(b"d6:lengthi1024e4:name8:test.txt12:piece lengthi512e6:pieces40:");
+    raw.extend_from_slice(&[0xAA; 20]);
+    raw.extend_from_slice(&[0xBB; 20]);
+    raw.extend_from_slice(b"e");
+    let info_end = raw.len();
+
+    raw.extend_from_slice(b"e");
+
+    // Compute expected sha-1 independently
+    let expected_hash: [u8; 20] = Sha1::digest(&raw[info_start..info_end]).into();
+
+    let torrent = Torrent::from_bytes(&raw).expect("Failed to parse torrent");
+
+    assert_eq!(torrent.announce, "http://tracker.test/ann");
+    assert_eq!(torrent.name, "test.txt");
+    assert_eq!(torrent.length, 1024);
+    assert_eq!(torrent.piece_length, 512);
+    assert_eq!(torrent.piece_hashes.len(), 2);
+    assert_eq!(torrent.piece_hashes[0], [0xAA; 20]);
+    assert_eq!(torrent.piece_hashes[1], [0xBB; 20]);
+    assert_eq!(torrent.info_hash, expected_hash);
+  }
+} 
